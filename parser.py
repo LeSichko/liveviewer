@@ -10,7 +10,11 @@ def _row_sort_dt(r: MatchRow) -> datetime:
     return dt or datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
-def parse_schedule(schedule: Dict[str, Any]) -> Tuple[List[MatchRow], List[MatchRow]]:
+def parse_schedule(schedule: Dict[str, Any]) -> Tuple[List[MatchRow], List[MatchRow], Optional[str]]:
+    """
+    Возвращает (active, finished, older_token).
+    older_token — pageToken для загрузки более старых матчей, None если страниц больше нет.
+    """
     events = sg(schedule, "data.schedule.events", []) or []
     active: List[MatchRow] = []
     finished: List[MatchRow] = []
@@ -57,16 +61,12 @@ def parse_schedule(schedule: Dict[str, Any]) -> Tuple[List[MatchRow], List[Match
             active.append(row)
 
     finished.sort(key=_row_sort_dt, reverse=True)
-    return active, finished
+
+    older_token = sg(schedule, "data.schedule.pages.older", None)
+    return active, finished, older_token
 
 
 def pick_game_id(event_details: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
-    """
-    Логика Andy:
-    - если есть карта inProgress -> берём её
-    - иначе последняя completed
-    - иначе последняя из списка
-    """
     games = sg(event_details, "data.event.match.games", []) or []
     ids: List[str] = []
     inprog: Optional[str] = None

@@ -39,9 +39,12 @@ class LolEsportsClient:
             "user-agent": "lol-live-viewer/10",
         }
 
-    def get_schedule(self) -> Dict[str, Any]:
+    def get_schedule(self, page_token: Optional[str] = None) -> Dict[str, Any]:
         url = f"{PERSISTED_BASE}/getSchedule"
-        _, data = http_get_json(url, self.headers, params={"hl": self.hl})
+        params: Dict[str, str] = {"hl": self.hl}
+        if page_token:
+            params["pageToken"] = page_token
+        _, data = http_get_json(url, self.headers, params=params)
         return data or {}
 
     def get_event_details(self, match_id: str) -> Dict[str, Any]:
@@ -64,7 +67,6 @@ class LolEsportsClient:
         return http_get_json(url, self.feed_headers, params=params)
 
     def anchor_time(self, offset_sec: int) -> str:
-        """Возвращает строку startingTime = сейчас минус offset_sec."""
         from utils import iso_date_multiply_of_10
         anchor = iso_date_multiply_of_10()
         return minus_seconds_rfc3339(anchor, offset_sec)

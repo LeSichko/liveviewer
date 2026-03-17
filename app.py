@@ -43,6 +43,7 @@ class App:
         self.active_rows: List[MatchRow] = []
         self.finished_rows: List[MatchRow] = []
         self.selected: Optional[MatchRow] = None
+        self.older_token: Optional[str] = None   # pageToken для Load more
 
         self.event_details: Optional[Dict[str, Any]] = None
         self.all_game_ids: List[str] = []
@@ -67,7 +68,7 @@ class App:
         self.txt.config(font=self.ui_font)
         self.txt.bind("<MouseWheel>", self._on_mousewheel)
 
-        ico_path = Path(__file__).parent.parent / "icon.ico"
+        ico_path = Path(__file__).with_name("icon.ico")
         self.kda = KdaWindow(self.root, self.ui_font, self._on_mousewheel, ico_path=ico_path)
 
     # ------------------------------------------------------------------ #
@@ -140,6 +141,11 @@ class App:
         self.lb_finished = _make_listbox(tab_finished)
         self.lb_finished.bind("<<ListboxSelect>>", self.on_select_match)
 
+        # кнопка Load more под списком Finished
+        self.btn_load_more = ttk.Button(tab_finished, text="Load more", command=self.load_more)
+        self.btn_load_more.pack(fill=tk.X, padx=4, pady=(2, 4))
+        self.btn_load_more.state(["disabled"])  # выключена пока не загружено расписание
+
         ttk.Label(right, text="Details:").pack(anchor="w")
         self.txt = tk.Text(right, wrap="word")
         self.txt.pack(fill=tk.BOTH, expand=True)
@@ -152,7 +158,7 @@ class App:
         self.ui_font.configure(size=max(8, min(28, size + delta)))
 
     def _on_mousewheel(self, event):
-        if event.state & 0x0004:  # Ctrl pressed
+        if event.state & 0x0004:
             self._zoom(1 if event.delta > 0 else -1)
             return "break"
 
@@ -234,7 +240,6 @@ class App:
 
         id2name = self._team_id_to_name()
 
-        # 1) primary: window.gameMetadata
         if window_payload:
             gm = window_payload.get("gameMetadata") or {}
             bmeta = gm.get("blueTeamMetadata") or {}
@@ -244,7 +249,6 @@ class App:
             if bid is not None and rid is not None:
                 return id2name.get(str(bid), "BLUE"), id2name.get(str(rid), "RED")
 
-        # 2) fallback: eventDetails.match.games[].teams[].side
         ed = self.event_details or {}
         games = sg(ed, "data.event.match.games", []) or []
         for g in games:
@@ -277,8 +281,8 @@ class App:
     def _refresh_schedule_bg(self):
         try:
             sched = self.client.get_schedule()
-            active, finished = parse_schedule(sched)
-            self._ui(lambda: self._set_lists(active, finished))
+            active, finished, older_token = parse_schedule(sched)
+            self._ui(lambda: self._set_lists(active, finished, older_token, append=False))
             self._ui(lambda: self.status_var.set(
                 f"Schedule loaded. Active={len(active)} Finished={len(finished)}"
             ))
@@ -286,24 +290,73 @@ class App:
             msg = f"Schedule error: {e}"
             self._ui(lambda m=msg: self.status_var.set(m))
 
-    def _set_lists(self, active: List[MatchRow], finished: List[MatchRow]):
-        self.active_rows = active
-        self.finished_rows = finished
+    # ------------------------------------------------------------------ #
+    # Load more (older page)
+    # ------------------------------------------------------------------ #
+    def load_more(self):
+        if not self.client or not self.older_token:
+            return
+        self.btn_load_more.state(["disabled"])
+        self.status_var.set("Loading more...")
+        self._run_bg(self._load_more_bg)
 
-        self.lb_active.delete(0, tk.END)
-        for r in active:
-            self.lb_active.insert(
-                tk.END, f"{pretty_local(r.start_time)} | [{r.league}] {r.team1} vs {r.team2} | {r.state}"
-            )
+    def _load_more_bg(self):
+        try:
+            sched = self.client.get_schedule(page_token=self.older_token)
+            _, finished, older_token = parse_schedule(sched)
+            self._ui(lambda: self._set_lists([], finished, older_token, append=True))
+            self._ui(lambda: self.status_var.set(
+                f"Loaded {len(finished)} more. {'More available.' if older_token else 'No more pages.'}"
+            ))
+        except Exception as e:
+            msg = f"Load more error: {e}"
+            self._ui(lambda m=msg: self.status_var.set(m))
+            self._ui(lambda: self.btn_load_more.state(["!disabled"]))
 
-        self.lb_finished.delete(0, tk.END)
-        for r in finished:
-            s1 = r.score1 if r.score1 is not None else "?"
-            s2 = r.score2 if r.score2 is not None else "?"
-            self.lb_finished.insert(
-                tk.END,
-                f"{pretty_local(r.end_time or r.start_time)} | [{r.league}] {r.team1} {s1}-{s2} {r.team2}",
-            )
+    def _set_lists(
+        self,
+        active: List[MatchRow],
+        finished: List[MatchRow],
+        older_token: Optional[str],
+        append: bool = False,
+    ):
+        self.older_token = older_token
+
+        # включаем/выключаем кнопку Load more
+        if older_token:
+            self.btn_load_more.state(["!disabled"])
+            self.btn_load_more.config(text="Load more")
+        else:
+            self.btn_load_more.state(["disabled"])
+            self.btn_load_more.config(text="Load more (no more pages)")
+
+        if not append:
+            self.active_rows = active
+            self.finished_rows = finished
+
+            self.lb_active.delete(0, tk.END)
+            for r in active:
+                self.lb_active.insert(
+                    tk.END, f"{pretty_local(r.start_time)} | [{r.league}] {r.team1} vs {r.team2} | {r.state}"
+                )
+            self.lb_finished.delete(0, tk.END)
+            for r in finished:
+                s1 = r.score1 if r.score1 is not None else "?"
+                s2 = r.score2 if r.score2 is not None else "?"
+                self.lb_finished.insert(
+                    tk.END,
+                    f"{pretty_local(r.end_time or r.start_time)} | [{r.league}] {r.team1} {s1}-{s2} {r.team2}",
+                )
+        else:
+            # дописываем в конец
+            self.finished_rows.extend(finished)
+            for r in finished:
+                s1 = r.score1 if r.score1 is not None else "?"
+                s2 = r.score2 if r.score2 is not None else "?"
+                self.lb_finished.insert(
+                    tk.END,
+                    f"{pretty_local(r.end_time or r.start_time)} | [{r.league}] {r.team1} {s1}-{s2} {r.team2}",
+                )
 
     # ------------------------------------------------------------------ #
     # Match selection
@@ -335,7 +388,6 @@ class App:
             self.all_game_ids = all_ids
             self._ui(self._refresh_game_selector)
 
-            # FIX: применяем manual_game_id корректно, без безусловной перезаписи
             if self.manual_game_id and self.manual_game_id in all_ids:
                 self.current_game_id = self.manual_game_id
             else:
@@ -361,7 +413,6 @@ class App:
                 d_status, d = self.client.get_details(self.current_game_id)
                 self.details_data = d
 
-            # finished match: fetch per-game one-shot
             if self.selected.state == "completed":
                 anchor = self.client.anchor_time(30)
                 for gid in all_ids:
@@ -420,7 +471,6 @@ class App:
 
             now = time.time()
 
-            # --- refresh eventDetails раз в ~410 сек ---
             if now - self._last_ed_refresh >= 410.0:
                 self._last_ed_refresh = now
                 try:
@@ -440,18 +490,15 @@ class App:
                 except Exception:
                     pass
 
-            # --- window ---
             w_status, w = self.client.get_window(gid, starting_time=anchor)
             if w_status == 200 and w and (w.get("frames") or []):
                 self.window_data = w
 
-            # --- details ---
             if self.use_details_var.get():
                 d_status, d = self.client.get_details(gid, starting_time=anchor)
                 if d_status == 200 and d and (d.get("frames") or []):
                     self.details_data = d
 
-            # --- per-game cache раз в games_poll_every_sec ---
             if now - self._last_games_poll >= self.games_poll_every_sec:
                 self._last_games_poll = now
                 for g2 in (self.all_game_ids or []):
@@ -478,7 +525,7 @@ class App:
             self._ui(lambda m=f"Poll error: {e}": self.status_var.set(m))
 
     # ------------------------------------------------------------------ #
-    # Render — main
+    # Render
     # ------------------------------------------------------------------ #
     def render(self):
         self.txt.config(state="normal")
@@ -541,40 +588,6 @@ class App:
 
         self.txt.insert(tk.END, f"Gold diff : {gold_diff:+d} ({lead_name})\n")
 
-    def _render_finished_window_per_game(self):
-        if not self.all_game_ids:
-            self.txt.insert(tk.END, "No game ids.\n")
-            return
-
-        for i, gid in enumerate(self.all_game_ids, 1):
-            w = self.finished_windows.get(gid)
-            if not w or not (w.get("frames") or []):
-                self.txt.insert(tk.END, f"Game {i}: {gid} (no window)\n")
-                continue
-
-            last = w["frames"][-1]
-            blue = last.get("blueTeam") or {}
-            red  = last.get("redTeam") or {}
-            blue_name, red_name = self._blue_red_names_for_game(gid, w)
-
-            diff = int(blue.get("totalGold", 0) or 0) - int(red.get("totalGold", 0) or 0)
-            lead = blue_name if diff > 0 else red_name if diff < 0 else "="
-
-            self.txt.insert(tk.END, f"Game {i}: {gid} | {pretty_utc(last.get('rfc460Timestamp'))}\n")
-            self.txt.insert(
-                tk.END,
-                f"  {blue_name} (BLUE): K={blue.get('totalKills', 0)} G={blue.get('totalGold', 0)} "
-                f"T={blue.get('towers', 0)} B={blue.get('barons', 0)} I={blue.get('inhibitors', 0)} "
-                f"D={fmt_dragons(blue)}\n",
-            )
-            self.txt.insert(
-                tk.END,
-                f"  {red_name}  (RED): K={red.get('totalKills', 0)} G={red.get('totalGold', 0)} "
-                f"T={red.get('towers', 0)} B={red.get('barons', 0)} I={red.get('inhibitors', 0)} "
-                f"D={fmt_dragons(red)}\n",
-            )
-            self.txt.insert(tk.END, f"  Gold diff: {diff:+d} ({lead})\n")
-
     # ------------------------------------------------------------------ #
     # KDA window
     # ------------------------------------------------------------------ #
@@ -630,12 +643,10 @@ class App:
 
         self.status_var.set(f"Saved: {path}")
 
-
     # ------------------------------------------------------------------ #
     # Google Sheets sync
     # ------------------------------------------------------------------ #
     def _sync_to_sheets(self, rows):
-        """Синхронизирует rows в Google Sheets если настроено. Вызывается из фонового потока."""
         if not SHEETS_URL:
             return
         err = sheets_sync.check_setup(SHEETS_KEY_PATH, SHEETS_URL)
@@ -649,6 +660,7 @@ class App:
             ))
         except Exception as e:
             self._ui(lambda m=str(e): self.status_var.set(f"Sheets error: {m}"))
+
     # ------------------------------------------------------------------ #
     # Threading helpers
     # ------------------------------------------------------------------ #
@@ -673,12 +685,10 @@ class App:
 
     def _write_kda_bg(self):
         try:
-            # Дозапрашиваем details для всех карт матча
             offset = int(self.anchor_offset_sec.get()) if self.anchor_offset_sec.get() else 30
             anchor = self.client.anchor_time(offset)
 
             for gid in self.all_game_ids:
-                # window
                 if gid not in self.finished_windows:
                     try:
                         st, ww = self.client.get_window(gid, starting_time=anchor)
@@ -686,7 +696,6 @@ class App:
                             self.finished_windows[gid] = ww
                     except Exception:
                         pass
-                # details
                 if gid not in self.finished_details:
                     try:
                         st, dd = self.client.get_details(gid, starting_time=anchor)
@@ -722,8 +731,9 @@ class App:
             msg = f"Write KDA error: {e}"
             self._ui(lambda m=msg: self.status_var.set(m))
             self._ui(lambda m=msg: messagebox.showerror("Write KDA error", m))
+
     # ------------------------------------------------------------------ #
-    # Write All KDA — все completed матчи из расписания
+    # Write All KDA
     # ------------------------------------------------------------------ #
     def write_all_kda(self):
         if not self.client:
@@ -756,14 +766,12 @@ class App:
             ))
 
             try:
-                # event details для этого матча
                 ed = self.client.get_event_details(match_row.match_id)
                 _, all_ids = pick_game_id(ed)
                 if not all_ids:
                     all_warnings.append(f"{match_row.team1} vs {match_row.team2}: нет game_id")
                     continue
 
-                # team id -> name для этого матча
                 teams = (((ed.get("data") or {}).get("event") or {}).get("match") or {}).get("teams") or []
                 id2name = {
                     str(t["id"]): t.get("code") or t.get("name") or str(t["id"])
@@ -771,8 +779,8 @@ class App:
                 }
 
                 anchor = self.client.anchor_time(offset)
-                windows  = {}
-                details  = {}
+                windows = {}
+                details = {}
 
                 for gid in all_ids:
                     try:
