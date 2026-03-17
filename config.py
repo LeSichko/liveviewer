@@ -19,4 +19,4 @@ DRAGON_ABBR = {
 # Google Sheets sync (опционально)
 # Заполни оба поля чтобы включить синхронизацию
 SHEETS_KEY_PATH = "json.json"  # путь к JSON ключу сервис аккаунта
-SHEETS_URL = "https://docs.google.com/spreadsheets/d/1Qeg0-MVrC6Ya2Jkq7YE3ZY2NIMh-N7jLta2TdLiQiYE/edit?gid=0#gid=0"                            # ссылка на Google таблицу
+SHEETS_URL = "https://docs.google.com/spreadsheets/d/1Qeg0-MVrC6Ya2Jkq7YE3ZY2NIMh-N7jLta2TdLiQiYE/edit?usp=sharing"                            # ссылка на Google таблицу
