@@ -11,6 +11,7 @@ sheets_sync.py — синхронизация kda_stats с Google Sheets.
   5. Вручную создать первую строку в таблице с названиями колонок
 """
 
+from datetime import date as date_type
 from typing import List, Optional
 from pathlib import Path
 
@@ -28,6 +29,18 @@ SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+# Дата начала отсчёта серийных номеров в Google Sheets
+_SHEETS_EPOCH = date_type(1899, 12, 30)
+
+
+def _date_to_serial(date_str: str) -> int:
+    """Конвертирует строку '2026-03-15' в серийный номер Google Sheets."""
+    try:
+        d = date_type.fromisoformat(date_str)
+        return (d - _SHEETS_EPOCH).days
+    except Exception:
+        return date_str  # если не парсится — оставляем строкой
 
 
 def is_available() -> bool:
@@ -76,14 +89,27 @@ def sync_rows(new_rows: List[KdaRow], key_path: str, url: str) -> tuple[int, int
 
     sheet.clear()
     if final:
-        sheet.update(final, "A1")
+        # value_input_option="RAW" чтобы числа не интерпретировались как формулы
+        sheet.update(final, "A1", value_input_option="USER_ENTERED")
 
     total = len(final) - 1  # минус заголовок
     return len(new_rows), total
 
 
 def _row_to_list(r: KdaRow) -> list:
-    return [str(getattr(r, f, "")) for f in FIELDNAMES]
+    result = []
+    for f in FIELDNAMES:
+        val = getattr(r, f, "")
+        if f == "kills":
+            try:
+                result.append(int(val))
+            except (ValueError, TypeError):
+                result.append(0)
+        elif f == "date":
+            result.append(_date_to_serial(str(val)) if val else "")
+        else:
+            result.append(str(val))
+    return result
 
 
 def check_setup(key_path: str, url: str) -> Optional[str]:
