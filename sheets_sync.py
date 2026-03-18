@@ -4,11 +4,9 @@ sheets_sync.py — синхронизация kda_stats с Google Sheets.
 Зависимость: pip install gspread
 
 Настройка:
-  1. Google Cloud Console → включить Google Sheets API + Google Drive API
-  2. Создать Service Account → скачать JSON ключ → положить рядом с main.py
-  3. Открыть таблицу → Настройки доступа → добавить email сервис аккаунта (редактор)
-  4. В config.py заполнить SHEETS_KEY_PATH и SHEETS_URL
-  5. Вручную создать первую строку в таблице с названиями колонок
+  1. В config.py заполнить SHEETS_URL и SHEETS_CREDENTIALS
+  2. Открыть таблицу → Настройки доступа → добавить client_email из SHEETS_CREDENTIALS (редактор)
+  3. Вручную создать первую строку в таблице с названиями колонок
 """
 
 from datetime import date as date_type
@@ -23,6 +21,7 @@ except ImportError:
     GSPREAD_AVAILABLE = False
 
 from kda_tracker import KdaRow, FIELDNAMES
+from config import SHEETS_CREDENTIALS, SHEETS_URL
 
 
 SCOPES = [
@@ -30,30 +29,28 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Дата начала отсчёта серийных номеров в Google Sheets
 _SHEETS_EPOCH = date_type(1899, 12, 30)
 
 
-def _date_to_serial(date_str: str) -> int:
-    """Конвертирует строку '2026-03-15' в серийный номер Google Sheets."""
+def _date_to_serial(date_str: str):
     try:
         d = date_type.fromisoformat(date_str)
         return (d - _SHEETS_EPOCH).days
     except Exception:
-        return date_str  # если не парсится — оставляем строкой
+        return date_str
 
 
 def is_available() -> bool:
     return GSPREAD_AVAILABLE
 
 
-def _open_sheet(key_path: str, url: str):
-    creds = Credentials.from_service_account_file(key_path, scopes=SCOPES)
+def _open_sheet():
+    creds = Credentials.from_service_account_info(SHEETS_CREDENTIALS, scopes=SCOPES)
     client = gspread.authorize(creds)
-    return client.open_by_url(url).sheet1
+    return client.open_by_url(SHEETS_URL).sheet1
 
 
-def sync_rows(new_rows: List[KdaRow], key_path: str, url: str) -> tuple[int, int]:
+def sync_rows(new_rows: List[KdaRow]) -> tuple[int, int]:
     """
     Синхронизирует new_rows с Google Sheets.
     - Читает все существующие строки
@@ -61,13 +58,12 @@ def sync_rows(new_rows: List[KdaRow], key_path: str, url: str) -> tuple[int, int
     - Дописывает new_rows
     Возвращает (добавлено, итого строк в таблице).
     """
-    sheet = _open_sheet(key_path, url)
+    sheet = _open_sheet()
     existing = sheet.get_all_values()
 
     if not existing:
         return 0, 0
 
-    # Определяем индекс колонки game_id по заголовку
     header = existing[0]
     try:
         gid_col = header.index("game_id")
@@ -76,23 +72,20 @@ def sync_rows(new_rows: List[KdaRow], key_path: str, url: str) -> tuple[int, int
 
     new_gids = {r.game_id for r in new_rows}
 
-    # Оставляем заголовок + строки без совпадений по game_id
     filtered = [existing[0]]
     for row in existing[1:]:
         row_gid = row[gid_col] if gid_col < len(row) else ""
         if row_gid not in new_gids:
             filtered.append(row)
 
-    # Собираем итоговый массив и пишем одним запросом
     rows_to_write = [_row_to_list(r) for r in new_rows]
     final = filtered + rows_to_write
 
     sheet.clear()
     if final:
-        # value_input_option="RAW" чтобы числа не интерпретировались как формулы
         sheet.update(final, "A1", value_input_option="USER_ENTERED")
 
-    total = len(final) - 1  # минус заголовок
+    total = len(final) - 1
     return len(new_rows), total
 
 
@@ -112,15 +105,13 @@ def _row_to_list(r: KdaRow) -> list:
     return result
 
 
-def check_setup(key_path: str, url: str) -> Optional[str]:
+def check_setup() -> Optional[str]:
     if not GSPREAD_AVAILABLE:
         return "Библиотека gspread не установлена.\nВыполни: pip install gspread"
-    if not key_path or not Path(key_path).exists():
-        return f"Файл ключа не найден: {key_path}"
-    if not url:
+    if not SHEETS_URL:
         return "SHEETS_URL не заполнен в config.py"
     try:
-        sheet = _open_sheet(key_path, url)
+        sheet = _open_sheet()
         _ = sheet.title
     except Exception as e:
         return f"Ошибка подключения к таблице:\n{e}"

@@ -14,7 +14,7 @@ import requests
 from config import DEFAULT_HL, DEFAULT_API_KEY
 from kda_tracker import extract_kda_rows, save_rows, CSV_PATH
 import sheets_sync
-from config import SHEETS_KEY_PATH, SHEETS_URL
+from config import SHEETS_URL
 from models import MatchRow
 from utils import (
     sg, parse_rfc3339, pretty_utc, pretty_local,
@@ -649,12 +649,12 @@ class App:
     def _sync_to_sheets(self, rows):
         if not SHEETS_URL:
             return
-        err = sheets_sync.check_setup(SHEETS_KEY_PATH, SHEETS_URL)
+        err = sheets_sync.check_setup()
         if err:
             self._ui(lambda m=err: self.status_var.set(f"Sheets: {m.splitlines()[0]}"))
             return
         try:
-            added, total = sheets_sync.sync_rows(rows, SHEETS_KEY_PATH, SHEETS_URL)
+            added, total = sheets_sync.sync_rows(rows)
             self._ui(lambda a=added, t=total: self.status_var.set(
                 f"Sheets: +{a} строк, итого {t}"
             ))
